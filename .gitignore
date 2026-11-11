@@ -1,24 +1,15 @@
-# Python
+# Byte-compiled / optimized files
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
-.Python
+
+# Packaging / build artifacts
 build/
-develop-eggs/
 dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
-*.egg
+.eggs/
+wheels/
+pip-wheel-metadata/
 MANIFEST
 
 # Virtual environments
@@ -26,18 +17,49 @@ MANIFEST
 venv/
 ENV/
 env/
-env.bak/
-venv.bak/
 
-# Playwright
-ms-playwright/
-.playwright/
+# Flask runtime
+instance/
+.webassets-cache
 
-# Video / media artifacts
+# Application data and generated media
+uploads/
+video/
+*.db
+*.sqlite
+*.sqlite3
+videos.db
 *.webm
 *.mp4
 *.mov
 *.avi
+
+# Playwright
+ms-playwright/
+.playwright/
+playwright-report/
+test-results/
+
+# Tests and linters
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Logs
+*.log
+logs/
 
 # IDE / editors
 .idea/
@@ -50,12 +72,5 @@ ms-playwright/
 .DS_Store
 Thumbs.db
 
-# Environment / secrets
-.env
-.env.*
-*.key
-*.pem
-
-# Logs
-*.log
-logs/
+# Local tooling state
+.swarm/
