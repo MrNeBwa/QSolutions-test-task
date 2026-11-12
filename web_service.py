@@ -1,39 +1,63 @@
 import os
-import sqlite3
-from datetime import datetime
+import time
 from urllib.parse import quote
 
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from flask import Flask, g, jsonify, request, send_from_directory
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
-DB_PATH = os.path.join(BASE_DIR, "videos.db")
-
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 app = Flask(__name__)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
+DB_CONFIG = {
+    "host": os.environ.get("DB_HOST", "db"),
+    "port": int(os.environ.get("DB_PORT", 5432)),
+    "dbname": os.environ.get("DB_NAME", "videos"),
+    "user": os.environ.get("DB_USER", "video_user"),
+    "password": os.environ.get("DB_PASSWORD", "video_pass"),
+}
+
+
+def wait_for_db(max_retries=30, delay=2):
+    for attempt in range(1, max_retries + 1):
+        try:
+            conn = psycopg2.connect(**DB_CONFIG)
+            conn.close()
+            return
+        except psycopg2.OperationalError:
+            if attempt == max_retries:
+                raise
+            time.sleep(delay)
+
+
+wait_for_db()
+
 
 def get_db():
     if "db" not in g:
-        g.db = sqlite3.connect(DB_PATH, timeout=10.0)
-        g.db.row_factory = sqlite3.Row
-        g.db.execute("PRAGMA journal_mode=WAL")
-        g.db.execute("PRAGMA busy_timeout=5000")
-        g.db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS videos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                company_name TEXT NOT NULL UNIQUE,
-                file_path TEXT NOT NULL,
-                video_url TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )
-            """
-        )
-        g.db.commit()
+        try:
+            g.db = psycopg2.connect(**DB_CONFIG)
+            g.db.autocommit = False
+            with g.db.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS videos (
+                        id SERIAL PRIMARY KEY,
+                        company_name TEXT NOT NULL UNIQUE,
+                        file_path TEXT NOT NULL,
+                        video_url TEXT NOT NULL,
+                        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+                    )
+                """)
+            g.db.commit()
+        except psycopg2.OperationalError as e:
+            raise psycopg2.OperationalError(
+                f"Database unavailable: {e}"
+            ) from e
     return g.db
 
 
@@ -50,31 +74,54 @@ def safe_filename(name: str) -> str:
 
 def upsert_video(company_name: str, file_path: str, video_url: str):
     db = get_db()
-    db.execute(
-        """
-        INSERT INTO videos (company_name, file_path, video_url, updated_at)
-        VALUES (?, ?, ?, datetime('now'))
-        ON CONFLICT(company_name) DO UPDATE SET
-            file_path = excluded.file_path,
-            video_url = excluded.video_url,
-            updated_at = datetime('now')
-        """,
-        (company_name, file_path, video_url),
-    )
+    with db.cursor() as cur:
+        cur.execute("""
+            INSERT INTO videos (company_name, file_path, video_url, updated_at)
+            VALUES (%s, %s, %s, NOW())
+            ON CONFLICT (company_name) DO UPDATE SET
+                file_path = EXCLUDED.file_path,
+                video_url = EXCLUDED.video_url,
+                updated_at = NOW()
+        """, (company_name, file_path, video_url))
     db.commit()
 
 
 def get_video(company_name: str):
-    return get_db().execute(
-        "SELECT * FROM videos WHERE company_name = ?", (company_name,)
-    ).fetchone()
+    db = get_db()
+    with db.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT * FROM videos WHERE company_name = %s", (company_name,))
+        return cur.fetchone()
 
+
+@app.route("/", methods=["GET"])
+def index():
+    return jsonify({
+        "service": "video-web-service",
+        "status": "ok",
+        "endpoints": [
+            "POST /upload",
+            "GET  /get_video_url?company_name=...",
+            "GET  /media/<filename>",
+            "GET  /videos",
+            "GET  /health",
+        ],
+    })
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    try:
+        db = get_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT 1")
+        return jsonify({"status": "ok", "db": "ok"}), 200
+    except psycopg2.OperationalError as e:
+        return jsonify({"status": "degraded", "db": "unavailable", "detail": str(e)}), 503
 
 @app.route("/upload", methods=["POST"])
 def upload_video():
     if "file" not in request.files:
         return jsonify({"error": "no file part"}), 400
-
     file = request.files["file"]
     if not file.filename:
         return jsonify({"error": "empty filename"}), 400
@@ -114,11 +161,13 @@ def serve_media(filename):
 
 @app.route("/videos", methods=["GET"])
 def list_videos():
-    rows = get_db().execute("SELECT * FROM videos ORDER BY id DESC").fetchall()
+    db = get_db()
+    with db.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT * FROM videos ORDER BY id DESC")
+        rows = cur.fetchall()
     return jsonify([dict(r) for r in rows])
 
 
-if __name__ == "__main__":
-    host = os.environ.get("FLASK_HOST", "0.0.0.0")
-    port = int(os.environ.get("FLASK_PORT", "8000"))
-    app.run(host=host, port=port, threaded=True)
+@app.errorhandler(psycopg2.OperationalError)
+def handle_db_error(e):
+    return jsonify({"error": "Database unavailable", "detail": str(e)}), 503
