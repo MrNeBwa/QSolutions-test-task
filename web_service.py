@@ -22,11 +22,25 @@ DB_CONFIG = {
 }
 
 
-def wait_for_db(max_retries=30, delay=2):
+def init_db(max_retries=30, delay=2):
     for attempt in range(1, max_retries + 1):
         try:
             conn = psycopg2.connect(**DB_CONFIG)
-            conn.close()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS videos (
+                            id SERIAL PRIMARY KEY,
+                            company_name TEXT NOT NULL UNIQUE,
+                            file_path TEXT NOT NULL,
+                            video_url TEXT NOT NULL,
+                            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                            updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+                        )
+                    """)
+                conn.commit()
+            finally:
+                conn.close()
             return
         except psycopg2.OperationalError:
             if attempt == max_retries:
@@ -34,7 +48,7 @@ def wait_for_db(max_retries=30, delay=2):
             time.sleep(delay)
 
 
-wait_for_db()
+init_db()
 
 
 def get_db():
@@ -42,18 +56,6 @@ def get_db():
         try:
             g.db = psycopg2.connect(**DB_CONFIG)
             g.db.autocommit = False
-            with g.db.cursor() as cur:
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS videos (
-                        id SERIAL PRIMARY KEY,
-                        company_name TEXT NOT NULL UNIQUE,
-                        file_path TEXT NOT NULL,
-                        video_url TEXT NOT NULL,
-                        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-                    )
-                """)
-            g.db.commit()
         except psycopg2.OperationalError as e:
             raise psycopg2.OperationalError(
                 f"Database unavailable: {e}"
@@ -69,7 +71,7 @@ def close_db(exception=None):
 
 
 def safe_filename(name: str) -> str:
-    return "".join(c if c.isalnum() or c in "-_." else "_" for c in name).strip("_") or "video"
+    return "".join(c if c.isalnum() or c in "-_." else "_" for c in name).strip("_.") or "video"
 
 
 def upsert_video(company_name: str, file_path: str, video_url: str):
@@ -110,13 +112,28 @@ def index():
 
 @app.route("/health", methods=["GET"])
 def health():
+    uploads_writable = os.access(UPLOAD_FOLDER, os.W_OK)
     try:
         db = get_db()
         with db.cursor() as cur:
             cur.execute("SELECT 1")
-        return jsonify({"status": "ok", "db": "ok"}), 200
     except psycopg2.OperationalError as e:
-        return jsonify({"status": "degraded", "db": "unavailable", "detail": str(e)}), 503
+        return jsonify({
+            "status": "degraded",
+            "db": "unavailable",
+            "uploads": "ok" if uploads_writable else "not_writable",
+            "detail": str(e),
+        }), 503
+
+    if not uploads_writable:
+        return jsonify({
+            "status": "degraded",
+            "db": "ok",
+            "uploads": "not_writable",
+        }), 503
+
+    return jsonify({"status": "ok", "db": "ok", "uploads": "ok"}), 200
+
 
 @app.route("/upload", methods=["POST"])
 def upload_video():
@@ -130,7 +147,10 @@ def upload_video():
     if not company_name:
         return jsonify({"error": "company_name is required"}), 400
 
-    ext = os.path.splitext(file.filename)[1].lower() or ".webm"
+    raw_name = os.path.basename(file.filename.replace("\\", "/"))
+    ext = os.path.splitext(raw_name)[1].lower()
+    if not ext or ext == ".":
+        ext = ".webm"
     filename = safe_filename(company_name) + ext
     file_path = os.path.join(UPLOAD_FOLDER, filename)
     file.save(file_path)

@@ -28,11 +28,11 @@ RUN mod_wsgi-express module-config > /etc/apache2/mods-available/wsgi.load \
 COPY web_service.py wsgi.py ./
 COPY apache.conf /etc/apache2/sites-available/000-default.conf
 
-RUN mkdir -p /app/uploads
+RUN mkdir -p /app/uploads && chown -R www-data:www-data /app/uploads
 
 RUN a2dissite 000-default 2>/dev/null || true \
     && a2ensite 000-default || true
 
 EXPOSE 80
 
-CMD ["apache2ctl", "-D", "FOREGROUND"]
+CMD ["sh", "-c", "mkdir -p /app/uploads && chown -R www-data:www-data /app/uploads && exec apache2ctl -D FOREGROUND"]

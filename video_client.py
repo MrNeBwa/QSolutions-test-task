@@ -1,5 +1,4 @@
-from typing import Optional
-from urllib.parse import quote
+import os
 
 import requests
 
@@ -8,7 +7,7 @@ def UploadVideo(server_url: str, video_path: str, company_name: str) -> str:
     """Uploads a video file to the server and returns its URL."""
     url = server_url.rstrip("/") + "/upload"
     with open(video_path, "rb") as f:
-        files = {"file": (video_path.split("/")[-1], f)}
+        files = {"file": (os.path.basename(video_path), f)}
         data = {"company_name": company_name}
         resp = requests.post(url, files=files, data=data, timeout=60)
     resp.raise_for_status()
