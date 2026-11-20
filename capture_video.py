@@ -24,6 +24,10 @@ def main():
     parser.add_argument("--server", help="Web service URL, e.g. http://127.0.0.1:8000")
     parser.add_argument("--view-seconds", type=int, default=5,
                         help="Preview duration in seconds (0 = wait for Enter)")
+    parser.add_argument("--auto-zoom", action="store_true",
+                        help="Trigger programmatic window.__zoomAt(x, y) during recording")
+    parser.add_argument("--wait-processing", action="store_true",
+                        help="Wait for server-side zoom post-processing before preview")
     args = parser.parse_args()
 
     csv_path = INPUT_CSV
@@ -50,6 +54,7 @@ def main():
                 city,
                 row.get("Street", "").strip(),
                 row.get("HouseNo", "").strip(),
+                auto_zoom=args.auto_zoom,
             )
 
             if not video_path:
@@ -61,7 +66,10 @@ def main():
             if args.server:
                 try:
                     from video_client import UploadVideo
-                    video_url = UploadVideo(args.server, video_path, company_name)
+                    video_url = UploadVideo(
+                        args.server, video_path, company_name,
+                        wait_for_processing=args.wait_processing,
+                    )
                     print("Uploaded:", video_url)
                     preview_video(video_url, args.view_seconds)
                 except Exception as e:

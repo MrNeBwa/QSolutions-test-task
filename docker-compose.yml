@@ -16,6 +16,22 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  worker:
+    build: .
+    command: ["sh", "-c", "mkdir -p /app/uploads && chown -R www-data:www-data /app/uploads && exec su -s /bin/sh www-data -c 'python /app/worker.py'"]
+    volumes:
+      - uploads:/app/uploads
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: videos
+      DB_USER: video_user
+      DB_PASSWORD: ${DB_PASSWORD:-video_pass}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
   db:
     image: postgres:16
     environment:

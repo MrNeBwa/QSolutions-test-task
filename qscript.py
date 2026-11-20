@@ -9,6 +9,12 @@ from urllib.parse import quote_plus, urlsplit
 
 PATH_TO_VIDEO_FOLDER = "./video"
 
+VIEWPORT_W = 1280
+VIEWPORT_H = 720
+VIDEO_FPS = 25
+ZOOM_FACTOR = 2.0
+ZOOM_RAMP_SEC = 0.5
+
 CURSOR_SIZE = 32
 HIGHLIGHT_COLOR = "rgba(255,215,0,0.35)"
 HIGHLIGHT_RADIUS = 32
@@ -28,8 +34,47 @@ INIT_TEMPLATE = r"""
   const HL_R = __QHL_R__;
   const HL_COLOR = "__QHL_COLOR__";
 
+  let lastX = 640;
+  let lastY = 360;
+  let zoomed = false;
+  let showZoomRing = null;
+
+  const track = (x, y) => {
+    if (typeof x === 'number' && Number.isFinite(x)) lastX = x;
+    if (typeof y === 'number' && Number.isFinite(y)) lastY = y;
+  };
+  window.addEventListener('mousemove', (e) => track(e.clientX, e.clientY), true);
+  window.addEventListener('pointermove', (e) => track(e.clientX, e.clientY), true);
+
+  const toggleZoom = (x, y) => {
+    const zx = (typeof x === 'number' && Number.isFinite(x)) ? x : lastX;
+    const zy = (typeof y === 'number' && Number.isFinite(y)) ? y : lastY;
+    track(zx, zy);
+    if (typeof window.__qRecordZoom === 'function') {
+      return Promise.resolve(window.__qRecordZoom(zx, zy)).then((ev) => {
+        const mode = (ev && ev.type) ? ev.type : (zoomed ? 'out' : 'in');
+        zoomed = (mode === 'in');
+        if (showZoomRing) showZoomRing(zx, zy, mode);
+        return ev;
+      });
+    }
+    const mode = zoomed ? 'out' : 'in';
+    zoomed = !zoomed;
+    if (showZoomRing) showZoomRing(zx, zy, mode);
+    return Promise.resolve({ x: zx, y: zy, type: mode });
+  };
+  window.__zoomAt = toggleZoom;
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'F5' || e.code === 'F5' || e.keyCode === 116) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      if (!e.repeat) toggleZoom(lastX, lastY);
+    }
+  }, true);
+
   const start = () => {
-  const root = document.documentElement;
   const SVGNS = 'http://www.w3.org/2000/svg';
   const MAXZ = 2147483647;
 
@@ -79,13 +124,45 @@ INIT_TEMPLATE = r"""
     transform: 'translate(-50%,-50%)', opacity: '0', margin: '0',
   });
 
-  const parts = [hl, arrow, ripple];
-  const attach = () => { for (const el of parts) if (!el.isConnected) root.appendChild(el); };
+  const zoomRing = document.createElement('div');
+  zoomRing.id = 'qzoom-ring';
+  css(zoomRing, {
+    position: 'fixed', left: '0px', top: '0px', width: '0px', height: '0px',
+    'border-radius': '50%', border: '4px solid rgba(0,200,83,0.95)', 'box-sizing': 'border-box',
+    background: 'rgba(0,200,83,0.14)', 'pointer-events': 'none', 'z-index': MAXZ,
+    transform: 'translate(-50%,-50%)', opacity: '0', margin: '0',
+  });
+
+  const parts = [hl, arrow, ripple, zoomRing];
+  const attach = () => {
+    const root = document.documentElement;
+    if (!root) return;
+    for (const el of parts) if (!el.isConnected || el.parentNode !== root) root.appendChild(el);
+  };
   attach();
   setInterval(attach, 250);
 
+  showZoomRing = (x, y, mode) => {
+    attach();
+    const isIn = mode === 'in';
+    const color = isIn ? 'rgba(0,200,83,0.95)' : 'rgba(255,61,0,0.95)';
+    zoomRing.setAttribute('data-zoom-state', mode);
+    css(zoomRing, { left: x + 'px', top: y + 'px', border: '4px solid ' + color, opacity: '1' });
+    const t0 = performance.now();
+    const anim = (t) => {
+      const p = Math.min((t - t0) / 450, 1);
+      const d = (isIn ? (96 - 56 * p) : (40 + 56 * p)) + 'px';
+      zoomRing.style.setProperty('width', d, 'important');
+      zoomRing.style.setProperty('height', d, 'important');
+      zoomRing.style.setProperty('opacity', String(1 - p), 'important');
+      if (p < 1) requestAnimationFrame(anim);
+    };
+    requestAnimationFrame(anim);
+  };
+
   const move = (x, y) => {
     attach();
+    track(x, y);
     arrow.style.setProperty('display', 'block', 'important');
     hl.style.setProperty('display', 'block', 'important');
     arrow.style.setProperty('left', x + 'px', 'important');
@@ -112,7 +189,7 @@ INIT_TEMPLATE = r"""
     requestAnimationFrame(anim);
   };
   window.__qRipple = doRipple;
-  window.addEventListener('mousedown', (e) => doRipple(e.clientX, e.clientY), true);
+  window.addEventListener('mousedown', (e) => { track(e.clientX, e.clientY); doRipple(e.clientX, e.clientY); }, true);
 
   window.__qShowCallout = (text, bgColor, textColor, fade) => {
     if (fade === undefined || fade === null) fade = 2;
@@ -154,6 +231,60 @@ def _build_init_script():
     script = script.replace("__QHL_R__", str(HIGHLIGHT_RADIUS))
     script = script.replace("__QHL_COLOR__", HIGHLIGHT_COLOR)
     return script
+
+
+class ZoomRecorder:
+    def __init__(self, width=VIEWPORT_W, height=VIEWPORT_H, fps=VIDEO_FPS,
+                 zoom_factor=ZOOM_FACTOR, ramp_sec=ZOOM_RAMP_SEC, clock=None):
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self.zoom_factor = zoom_factor
+        self.ramp_sec = ramp_sec
+        self._clock = clock or time.monotonic
+        self._t0 = self._clock()
+        self.is_zoomed = False
+        self.events = []
+
+    def toggle(self, x, y):
+        t = max(0.0, round(self._clock() - self._t0, 3))
+        px = max(0.0, min(float(self.width), round(float(x), 2)))
+        py = max(0.0, min(float(self.height), round(float(y), 2)))
+        ev_type = "out" if self.is_zoomed else "in"
+        self.is_zoomed = not self.is_zoomed
+        ev = {"t": t, "x": px, "y": py, "type": ev_type}
+        self.events.append(ev)
+        return ev
+
+    def attach(self, context):
+        self._t0 = self._clock()
+        context.expose_function("__qRecordZoom", self.toggle)
+
+    def write_sidecar(self, video_path):
+        sidecar_path = os.path.splitext(video_path)[0] + ".zoom.json"
+        if not self.events:
+            if os.path.exists(sidecar_path):
+                os.remove(sidecar_path)
+            return None
+        payload = {
+            "viewport": {"width": self.width, "height": self.height},
+            "fps": self.fps,
+            "zoom_factor": self.zoom_factor,
+            "ramp_sec": self.ramp_sec,
+            "events": self.events,
+        }
+        with open(sidecar_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        return sidecar_path
+
+
+def ZoomAt(page, x=None, y=None):
+    try:
+        if x is None or y is None:
+            return page.evaluate("() => window.__zoomAt && window.__zoomAt()")
+        return page.evaluate("([x, y]) => window.__zoomAt && window.__zoomAt(x, y)", [x, y])
+    except Exception:
+        return None
 
 
 def ShowCallout(page, text, bgColor="yellow", textColor="black", fade=2):
@@ -228,6 +359,7 @@ def CaptureVideo_Magento(
     city,
     street,
     house_no,
+    auto_zoom=False,
 ):
     from playwright.sync_api import sync_playwright
     try:
@@ -241,11 +373,12 @@ def CaptureVideo_Magento(
 
     ctx_args = dict(
         record_video_dir=folder,
-        record_video_size={"width": 1280, "height": 720},
-        viewport={"width": 1280, "height": 720},
+        record_video_size={"width": VIEWPORT_W, "height": VIEWPORT_H},
+        viewport={"width": VIEWPORT_W, "height": VIEWPORT_H},
         user_agent=USER_AGENT,
     )
 
+    zoom_rec = ZoomRecorder()
     src = None
     try:
         init_script = _build_init_script()
@@ -261,7 +394,8 @@ def CaptureVideo_Magento(
                 try:
                     if has_stealth:
                         stealth_sync(context)
-                    
+
+                    zoom_rec.attach(context)
                     context.add_init_script(init_script)
                     page = context.new_page()
                     src = page.video.path()
@@ -284,11 +418,19 @@ def CaptureVideo_Magento(
                     _click(page, pos, cx, cy)
                     time.sleep(0.3)
 
+                    if auto_zoom:
+                        ZoomAt(page, cx, cy)
+                        time.sleep(0.3)
+
                     query = "Magento developer in %s" % city
                     for ch in query:
                         page.keyboard.type(ch)
                         time.sleep(random.uniform(0.06, 0.18))
                     time.sleep(0.5)
+
+                    if auto_zoom and zoom_rec.is_zoomed:
+                        ZoomAt(page, cx, cy)
+                        time.sleep(0.5)
 
                     form = box.locator("xpath=ancestor::form[1]")
                     btn = form.locator('button[type="submit"]:visible').first
@@ -321,11 +463,14 @@ def CaptureVideo_Magento(
                         res.evaluate("e => { e.removeAttribute('target'); e.setAttribute('rel', 'noopener'); }")
                     except Exception:
                         pass
-                        
+
                     ShowCallout(page, "Opening the first result")
                     rx, ry = _center(res)
                     _smooth_move(page, pos, rx, ry)
                     time.sleep(0.3)
+                    if auto_zoom and not zoom_rec.is_zoomed:
+                        ZoomAt(page, rx, ry)
+                        time.sleep(0.5)
                     _click(page, pos, rx, ry)
 
                     page.wait_for_load_state("domcontentloaded", timeout=30000)
@@ -334,6 +479,9 @@ def CaptureVideo_Magento(
                         page.evaluate(f"window.__qMoveCursor({pos['x']}, {pos['y']})")
                     except Exception:
                         pass
+                    if auto_zoom and zoom_rec.is_zoomed:
+                        time.sleep(1.0)
+                        ZoomAt(page, pos["x"], pos["y"])
                     time.sleep(3)
                 finally:
                     context.close()
@@ -355,4 +503,8 @@ def CaptureVideo_Magento(
     except Exception as e:
         print("Error renaming video:", e)
         return None
+
+    sidecar = zoom_rec.write_sidecar(dst)
+    if sidecar:
+        print(f"Saved zoom sidecar: {sidecar} ({len(zoom_rec.events)} events)")
     return dst

@@ -1,7 +1,8 @@
 ## Архитектура
-- **web** — Apache + mod_wsgi, на котором запущено Flask-приложение (`web_service.py`). Внутри контейнера слушает порт `80`, на хост пробрасывается порт `8000`.
+- **web** — Apache + mod_wsgi, на котором запущено Flask-приложение (`web_service.py`) с установленным `ffmpeg`. Внутри контейнера слушает порт `80`, на хост пробрасывается порт `8000`.
+- **worker** — фоновый процесс (`worker.py`), который забирает задачи из таблицы `jobs` в PostgreSQL, применяет `apply_zoom.py` и сохраняет `processed_video_url`.
 - **db** — база данных PostgreSQL 16.
-- **docker-compose.yml** — оркестрирует оба контейнера, настраивает сеть, тома и зависимости.
+- **docker-compose.yml** — оркестрирует контейнеры, настраивает сеть, тома и зависимости.
 
 ## Быстрый запуск
 
@@ -22,17 +23,20 @@ API будет доступно по адресу: **http://localhost:8000**
 | Метод | URL | Описание |
 |---|---|---|
 | `GET` | `/` | Список доступных эндпоинтов и статус сервиса. |
-| `GET` | `/health` | Проверка работоспособности (пингует БД, возвращает `200 OK` или `503`). |
-| `POST` | `/upload` | Загрузка видео. Multipart-форма с полями `file` и `company_name`. |
-| `GET` | `/get_video_url` | Получение ссылки на видео. Параметр `?company_name=...` (возвращает `404`, если нет). |
-| `GET` | `/media/<filename>` | Прямая отдача загруженного видеофайла (также обрабатывается Apache через `Alias`). |
+| `GET` | `/health` | Проверка работоспособности (пингует БД, проверяет `uploads` и `ffmpeg`, возвращает `200 OK` или `503`). |
+| `POST` | `/upload` | Загрузка видео. Multipart-форма с полями `file`, `company_name` и опционально `sidecar` (`.zoom.json`) или `zoom_events`. |
+| `GET` | `/get_video_url` | Получение ссылки на видео (`video_url` и `processed_video_url`). Параметр `?company_name=...` (возвращает `404`, если нет). |
+| `GET` | `/media/<filename>` | Прямая отдача загруженного и обработанного видеофайла (также обрабатывается Apache через `Alias`). |
 | `GET` | `/videos` | Список всех записей в БД (для отладки). |
+| `GET` | `/jobs` | Список задач пост-обработки зума. |
+| `GET` | `/jobs/<id>` | Статус конкретной задачи и `processed_video_url`. |
+| `POST` | `/jobs/<id>/process` | Явный запуск пост-обработки задачи `<id>`. |
 
 ## Логи и отладка
 
-Посмотреть логи веб-сервиса:
+Посмотреть логи веб-сервиса и воркера:
 ```bash
-docker compose logs -f web
+docker compose logs -f web worker
 ```
 
 Проверить работу изнутри контейнера:
@@ -41,9 +45,9 @@ docker compose exec web curl -s http://localhost/
 docker compose exec web curl -s http://localhost/health
 ```
 
-## Клиентская часть (Запись видео)
+## Клиентская часть (Запись видео и зум)
 
-Скрипты для записи видео (`qscript.py`, `capture_video.py`, `video_client.py`) **не входят в Docker-образ** и запускаются на хост-машине. 
+Скрипты для записи видео (`qscript.py`, `capture_video.py`, `video_client.py`) **не входят в Docker-образ** и запускаются на хост-машине.
 
 1. Установите зависимости для клиента:
    ```bash
@@ -54,4 +58,22 @@ docker compose exec web curl -s http://localhost/health
    ```bash
    python capture_video.py --server http://127.0.0.1:8000
    ```
-   *(Скрипт запишет видео, отправит его на сервер по адресу `http://127.0.0.1:8000` и откроет превью в браузере).*
+   *(Во время записи можно нажимать **F5**, чтобы переключать zoom-in / zoom-out вокруг курсора; для автоматического зума через `window.__zoomAt(x, y)` и ожидания результата добавьте `--auto-zoom --wait-processing`).*
+
+При наличии хотя бы одного события рядом с видео сохраняется sidecar `<video>.zoom.json`. Если событий нет — файл не создаётся.
+
+## Локальная пост-обработка (`apply_zoom.py`)
+
+```bash
+python apply_zoom.py --video "video/Acme Corp.webm" --dry-run
+python apply_zoom.py --video "video/Acme Corp.webm"
+python apply_zoom.py --video "video/Acme Corp.webm" --ffmpeg /path/to/ffmpeg
+```
+
+## Тесты
+
+```bash
+pytest -v
+```
+
+Тесты автоматически запускаются в GitHub Actions на каждый Pull Request (`.github/workflows/ci.yml`).
