@@ -1,81 +1,54 @@
-from __future__ import annotations
-
-import os
-import signal
 import time
 
 import psycopg2
+from psycopg2.extras import RealDictCursor
 
-os.environ.setdefault("SKIP_INIT_DB", "1")
-import web_service  # noqa: E402
+import web_service
 
-POLL_INTERVAL = float(os.environ.get("WORKER_POLL_INTERVAL", "1.0"))
-
-_running = True
+POLL_INTERVAL = 1.0
 
 
-def _handle_signal(signum, frame):
-    global _running
-    print(f"[worker] Received signal {signum}, shutting down...", flush=True)
-    _running = False
+def pick_pending_job(conn):
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("""
+            SELECT * FROM jobs
+            WHERE status = 'pending'
+            ORDER BY id ASC
+            LIMIT 1
+        """)
+        job = cur.fetchone()
+        if job is None:
+            return None
+        cur.execute(
+            "UPDATE jobs SET status = 'processing', updated_at = NOW() WHERE id = %s",
+            (job["id"],),
+        )
+    conn.commit()
+    return dict(job)
 
 
-def run_worker() -> None:
-    signal.signal(signal.SIGTERM, _handle_signal)
-    signal.signal(signal.SIGINT, _handle_signal)
-
-    print("[worker] Initializing database schema...", flush=True)
-    web_service.init_db()
-    print(
-        f"[worker] Ready (poll_interval={POLL_INTERVAL}s, ffmpeg={web_service.FFMPEG_PATH})",
-        flush=True,
-    )
-
-    conn = None
-    while _running:
+def main():
+    print("Zoom worker started", flush=True)
+    while True:
+        conn = None
         try:
-            if conn is None or conn.closed:
-                conn = psycopg2.connect(**web_service.DB_CONFIG)
-                conn.autocommit = False
-
-            job = web_service.claim_next_pending_job(conn)
+            conn = psycopg2.connect(**web_service.DB_CONFIG)
+            conn.autocommit = False
+            job = pick_pending_job(conn)
             if job is None:
                 time.sleep(POLL_INTERVAL)
                 continue
 
-            print(
-                f"[worker] Processing job #{job['id']} for company={job['company_name']!r} "
-                f"(input={job['input_path']})",
-                flush=True,
-            )
-            result = web_service.process_claimed_job(conn, job)
-            if result["status"] == "completed":
-                print(
-                    f"[worker] Completed job #{job['id']}: {result['processed_video_url']}",
-                    flush=True,
-                )
-            else:
-                print(
-                    f"[worker] Failed job #{job['id']}: {result.get('error')}",
-                    flush=True,
-                )
-        except psycopg2.OperationalError as exc:
-            print(f"[worker] Database connection error: {exc}; retrying...", flush=True)
+            print(f"Processing job #{job['id']} ({job['company_name']})", flush=True)
+            res = web_service.run_job(conn, job)
+            print(f"Job #{job['id']} -> {res['status']}: {res.get('processed_video_url') or res.get('error')}", flush=True)
+        except Exception as e:
+            print("Worker error:", e, flush=True)
+            time.sleep(2)
+        finally:
             if conn is not None:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-                conn = None
-            time.sleep(max(POLL_INTERVAL, 2.0))
-        except Exception as exc:
-            print(f"[worker] Unexpected error: {exc}", flush=True)
-            time.sleep(max(POLL_INTERVAL, 2.0))
-
-    if conn is not None and not conn.closed:
-        conn.close()
-    print("[worker] Stopped cleanly.", flush=True)
+                conn.close()
 
 
 if __name__ == "__main__":
-    run_worker()
+    main()
