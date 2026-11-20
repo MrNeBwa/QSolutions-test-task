@@ -7,3 +7,5 @@ video
 *.db
 .swarm
 .env
+.pytest_cache
+tests
