@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
     curl \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -25,7 +26,7 @@ RUN echo "ServerName localhost" > /etc/apache2/conf-available/servername.conf \
 RUN mod_wsgi-express module-config > /etc/apache2/mods-available/wsgi.load \
     && a2enmod wsgi
 
-COPY web_service.py wsgi.py ./
+COPY web_service.py wsgi.py apply_zoom.py worker.py ./
 COPY apache.conf /etc/apache2/sites-available/000-default.conf
 
 RUN mkdir -p /app/uploads && chown -R www-data:www-data /app/uploads
