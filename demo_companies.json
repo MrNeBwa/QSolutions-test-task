@@ -1,0 +1,76 @@
+[
+  {
+    "city": null,
+    "company_name": "nutrimmun GmbH",
+    "country": "Germany",
+    "created_at": "Mon, 23 Nov 2026 18:09:23 GMT",
+    "email": "info@nutrimmun.de",
+    "handelsregister": "HRB 6160",
+    "house_no": null,
+    "id": 1,
+    "impressum_url": "https://nutrimmun.de/impressum/",
+    "language": "German",
+    "legal_name": "nutrimmun GmbH",
+    "phone": "+49 251 135 66-0",
+    "postal_address": "Am Mittelhafen 56, 48155 Münster, Deutschland",
+    "postcode": null,
+    "raw_json": {
+      "company_name": "nutrimmun GmbH",
+      "email": "info@nutrimmun.de",
+      "handelsregister": "HRB 6160",
+      "phone": "+49 251 135 66-0",
+      "postal_address": {
+        "city": "Münster",
+        "country": "Deutschland",
+        "house_no": "56",
+        "postcode": "48155",
+        "street": "Am Mittelhafen"
+      },
+      "responsible_person": "Sabine Harders",
+      "vat_number": "DE 217 733 235"
+    },
+    "responsible_person": "Sabine Harders",
+    "status": 0,
+    "street": null,
+    "updated_at": "Mon, 23 Nov 2026 18:09:58 GMT",
+    "vat_number": "DE 217 733 235",
+    "web": "nutrimmun.de"
+  },
+  {
+    "city": null,
+    "company_name": "Barolo & Champagne GbR",
+    "country": "Germany",
+    "created_at": "Mon, 23 Nov 2026 18:09:23 GMT",
+    "email": "ce@baroloandchampagne.com",
+    "handelsregister": null,
+    "house_no": null,
+    "id": 2,
+    "impressum_url": "https://www.baroloandchampagne.com/impressum",
+    "language": "German",
+    "legal_name": "Barolo & Champagne GbR",
+    "phone": "+49 151 52700170",
+    "postal_address": "Diegelsbergerstr. 24, 73061 Ebersbach, Deutschland",
+    "postcode": null,
+    "raw_json": {
+      "company_name": "Barolo & Champagne GbR",
+      "email": "ce@baroloandchampagne.com",
+      "handelsregister": null,
+      "phone": "+49 151 52700170",
+      "postal_address": {
+        "city": "Ebersbach",
+        "country": "Deutschland",
+        "house_no": "24",
+        "postcode": "73061",
+        "street": "Diegelsbergerstr."
+      },
+      "responsible_person": "Claus Esslinger, Fabian Kehle",
+      "vat_number": "DE316472128"
+    },
+    "responsible_person": "Claus Esslinger, Fabian Kehle",
+    "status": 0,
+    "street": null,
+    "updated_at": "Mon, 23 Nov 2026 18:10:03 GMT",
+    "vat_number": "DE316472128",
+    "web": "baroloandchampagne.com"
+  }
+]
