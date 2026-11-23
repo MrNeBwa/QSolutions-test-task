@@ -15,8 +15,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install pytest
-        run: python -m pip install --upgrade pip pytest
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip pytest flask requests beautifulsoup4 lxml psycopg2-binary
 
-      - name: Run zoom tests
+      - name: Run tests
         run: pytest -v

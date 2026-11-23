@@ -11,6 +11,9 @@ services:
       DB_NAME: videos
       DB_USER: video_user
       DB_PASSWORD: ${DB_PASSWORD:-video_pass}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      DEEPSEEK_STUB: ${DEEPSEEK_STUB:-}
     depends_on:
       db:
         condition: service_healthy
@@ -34,6 +37,8 @@ services:
 
   db:
     image: postgres:16
+    ports:
+      - "${DB_PORT:-5432}:5432"
     environment:
       POSTGRES_DB: videos
       POSTGRES_USER: video_user

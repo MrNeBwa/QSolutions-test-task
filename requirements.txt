@@ -1,3 +1,6 @@
 flask
 psycopg2
 mod_wsgi
+requests
+beautifulsoup4
+lxml

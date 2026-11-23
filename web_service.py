@@ -1,3 +1,5 @@
+import csv
+import io
 import json
 import os
 import shutil
@@ -6,13 +8,29 @@ from urllib.parse import quote
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from flask import Flask, g, jsonify, request, send_from_directory
+from flask import Flask, g, jsonify, render_template_string, request, send_from_directory
 
 import apply_zoom
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SCHEMA_PATH = os.path.join(BASE_DIR, "schema.sql")
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+UPLOAD_COMPANIES_HTML = """<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Upload Companies CSV</title></head>
+<body>
+  <h1>Upload Companies CSV</h1>
+  <form action="/upload_companies" method="post" enctype="multipart/form-data">
+    <label for="file">CSV file (UTF-8, semicolon-delimited):</label><br><br>
+    <input id="file" type="file" name="file" accept=".csv,text/csv" required>
+    <button type="submit">Upload</button>
+  </form>
+  <p><a href="/companies">View all companies (JSON)</a></p>
+</body>
+</html>
+"""
 
 app = Flask(__name__)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
@@ -62,6 +80,8 @@ def init_db(max_retries=30, delay=2):
                             updated_at TIMESTAMP NOT NULL DEFAULT NOW()
                         )
                     """)
+                    with open(SCHEMA_PATH, encoding="utf-8") as sf:
+                        cur.execute(sf.read())
                 conn.commit()
             finally:
                 conn.close()
@@ -72,7 +92,8 @@ def init_db(max_retries=30, delay=2):
             time.sleep(delay)
 
 
-init_db()
+if os.environ.get("SKIP_INIT_DB") != "1":
+    init_db()
 
 
 def get_db():
@@ -189,6 +210,10 @@ def index():
             "GET  /jobs",
             "GET  /jobs/<id>",
             "POST /jobs/<id>/process",
+            "GET  /upload_companies",
+            "POST /upload_companies",
+            "GET  /companies",
+            "GET  /companies/<company_name>",
             "GET  /health",
         ],
     })
@@ -347,6 +372,104 @@ def process_job(job_id: int):
     result = run_job(db, dict(job))
     code = 200 if result["status"] == "completed" else 500
     return jsonify(result), code
+
+
+def _csv_cell(row: dict, key: str):
+    val = (row.get(key) or "").strip()
+    return val or None
+
+
+@app.route("/upload_companies", methods=["GET"])
+def upload_companies_form():
+    return render_template_string(UPLOAD_COMPANIES_HTML)
+
+
+@app.route("/upload_companies", methods=["POST"])
+def upload_companies():
+    if "file" not in request.files:
+        return jsonify({"error": "no file part"}), 400
+    file = request.files["file"]
+    if not file.filename:
+        return jsonify({"error": "empty filename"}), 400
+
+    try:
+        text = file.read().decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return jsonify({"error": "CSV must be UTF-8 encoded"}), 400
+
+    reader = csv.DictReader(io.StringIO(text), delimiter=";", quotechar='"')
+    if not reader.fieldnames or "Company Name" not in reader.fieldnames:
+        return jsonify({"error": "CSV must contain 'Company Name' column"}), 400
+
+    imported = 0
+    updated = 0
+    db = get_db()
+    with db.cursor() as cur:
+        for row in reader:
+            company_name = _csv_cell(row, "Company Name")
+            if not company_name:
+                continue
+            cur.execute("""
+                INSERT INTO companies (
+                    company_name, language, country, postcode, city, street, house_no, web
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (company_name) DO UPDATE SET
+                    language   = EXCLUDED.language,
+                    country    = EXCLUDED.country,
+                    postcode   = EXCLUDED.postcode,
+                    city       = EXCLUDED.city,
+                    street     = EXCLUDED.street,
+                    house_no   = EXCLUDED.house_no,
+                    web        = EXCLUDED.web,
+                    updated_at = NOW()
+                RETURNING (xmax = 0) AS inserted
+            """, (
+                company_name,
+                _csv_cell(row, "Language"),
+                _csv_cell(row, "Country"),
+                _csv_cell(row, "Postcode"),
+                _csv_cell(row, "City"),
+                _csv_cell(row, "Street"),
+                _csv_cell(row, "HouseNo"),
+                _csv_cell(row, "Web"),
+            ))
+            if cur.fetchone()[0]:
+                imported += 1
+            else:
+                updated += 1
+    db.commit()
+    return jsonify({"imported": imported, "updated": updated, "total_rows": imported + updated}), 200
+
+
+@app.route("/companies", methods=["GET"])
+def list_companies():
+    status_param = request.args.get("status")
+    db = get_db()
+    with db.cursor(cursor_factory=RealDictCursor) as cur:
+        if status_param is None or status_param == "":
+            cur.execute("SELECT * FROM companies ORDER BY id ASC")
+        elif status_param.lower() == "null":
+            cur.execute("SELECT * FROM companies WHERE status IS NULL ORDER BY id ASC")
+        else:
+            try:
+                status_code = int(status_param)
+            except ValueError:
+                return jsonify({"error": "status must be an integer"}), 400
+            cur.execute("SELECT * FROM companies WHERE status = %s ORDER BY id ASC", (status_code,))
+        rows = cur.fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/companies/<company_name>", methods=["GET"])
+def get_company(company_name: str):
+    db = get_db()
+    with db.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT * FROM companies WHERE company_name = %s", (company_name,))
+        row = cur.fetchone()
+    if row is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(dict(row))
 
 
 @app.errorhandler(psycopg2.OperationalError)
